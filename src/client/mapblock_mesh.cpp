@@ -105,19 +105,42 @@ u16 getInteriorLight(MapNode n, s32 increment, const NodeDefManager *ndef)
 	Calculate non-smooth lighting at face of node.
 	Single light bank.
 */
-static u8 getFaceLight(enum LightBank bank, MapNode n, MapNode n2, const NodeDefManager *ndef)
+static u8 getFaceLight(enum LightBank bank, MapNode n, MapNode n2, MapNode n3, const v3s16 &face, const NodeDefManager *ndef)
 {
 	ContentLightingFlags f1 = ndef->getLightingFlags(n);
 	ContentLightingFlags f2 = ndef->getLightingFlags(n2);
+	ContentLightingFlags f3 = ndef->getLightingFlags(n3);
 
 	u8 light;
+	
 	u8 l1 = n.getLight(bank, f1);
 	u8 l2 = n2.getLight(bank, f2);
+	u8 l3 = n3.getLight(bank, f3);
+	
 	if(l1 > l2)
 		light = l1;
 	else
 		light = l2;
-
+	
+	// Treat daylight as coming from above
+	if (bank == LIGHTBANK_DAY && face.Y != 0) {
+		u8 l3n = n3.getLight(LIGHTBANK_NIGHT, f3);
+		if (l3 > l3n) {
+			l3 += face.Y;
+		}
+	}
+	
+	// Apply shading for light travelling away from surface
+	if (l3 <= light) {
+		if (light >= 1) light--;
+		else light = 0;
+		
+		if (f3.has_light && l3 < light) {
+			if (light >= 1) light--;
+			else light = 0;
+		}
+	}
+	
 	// Boost light level for light sources
 	u8 light_source = MYMAX(f1.light_source, f2.light_source);
 	if(light_source > light)
@@ -130,10 +153,11 @@ static u8 getFaceLight(enum LightBank bank, MapNode n, MapNode n2, const NodeDef
 	Calculate non-smooth lighting at face of node.
 	Both light banks.
 */
-u16 getFaceLight(MapNode n, MapNode n2, const NodeDefManager *ndef)
+u16 getFaceLight(MapNode n, MapNode n2, MapNode n3, const v3s16 &face, const NodeDefManager *ndef)
 {
-	u16 day = getFaceLight(LIGHTBANK_DAY, n, n2, ndef);
-	u16 night = getFaceLight(LIGHTBANK_NIGHT, n, n2, ndef);
+	u8 day = getFaceLight(LIGHTBANK_DAY, n, n2, n3, face, ndef);
+	u8 night = getFaceLight(LIGHTBANK_NIGHT, n, n2, n3, face, ndef);
+	
 	return day | (night << 8);
 }
 

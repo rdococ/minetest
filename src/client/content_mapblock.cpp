@@ -444,6 +444,8 @@ void MapblockMeshGenerator::drawSolidNode()
 	for (int face = 0; face < 6; face++) {
 		v3s16 p2 = blockpos_nodes + cur_node.p + tile_dirs[face];
 		MapNode neighbor = data->m_vmanip.getNodeNoEx(p2);
+		v3s16 p3 = blockpos_nodes + cur_node.p + tile_dirs[face] * 2;
+		MapNode nextnbr = data->m_vmanip.getNodeNoEx(p3);
 		content_t n2 = neighbor.getContent();
 		bool backface_culling = cur_node.f->drawtype == NDT_NORMAL;
 		if (n2 == n1)
@@ -467,7 +469,7 @@ void MapblockMeshGenerator::drawSolidNode()
 				layer.material_flags |= MATERIAL_FLAG_BACKFACE_CULLING;
 		}
 		if (!data->m_smooth_lighting) {
-			lights[face] = getFaceLight(cur_node.n, neighbor, nodedef);
+			lights[face] = getFaceLight(cur_node.n, neighbor, nextnbr, tile_dirs[face], nodedef);
 		}
 	}
 	if (!faces)
