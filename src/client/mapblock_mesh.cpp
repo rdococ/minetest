@@ -166,7 +166,7 @@ u16 getFaceLight(MapNode n, MapNode n2, MapNode n3, const v3s16 &face, const Nod
 	Both light banks
 */
 static u16 getSmoothLightCombined(const v3s16 &p,
-	const std::array<v3s16,8> &dirs, MeshMakeData *data)
+	const std::array<v3s16,8> &dirs, MeshMakeData *data, const v3s16 &face_dir)
 {
 	const NodeDefManager *ndef = data->m_nodedef;
 
@@ -176,7 +176,14 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 	u16 light_day = 0;
 	u16 light_night = 0;
 	bool direct_sunlight = false;
-
+	
+	float day_darken = 1;
+	float night_darken = 1;
+	
+	u8 light_src_max_front = 0;
+	
+	bool nonzero_facedir = face_dir.X != 0 || face_dir.Y != 0 || face_dir.Z != 0;
+	
 	auto add_node = [&] (u8 i, bool obstructed = false) -> bool {
 		if (obstructed) {
 			ambient_occlusion++;
@@ -194,10 +201,33 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 			u8 light_level_night = n.getLight(LIGHTBANK_NIGHT, f.getLightingFlags());
 			if (light_level_day == LIGHT_SUN)
 				direct_sunlight = true;
+			
+			// adjust light based on direction
+			if (nonzero_facedir) {
+				if (dirs[i].X * face_dir.X + dirs[i].Y * face_dir.Y + dirs[i].Z * face_dir.Z == 0) {
+					if (f.light_source > light_src_max_front) light_src_max_front = f.light_source;
+					
+					MapNode n2 = data->m_vmanip.getNodeNoExNoEmerge(p + dirs[i] + face_dir);
+					const ContentFeatures &f2 = ndef->get(n2);
+					
+					if (f2.param_type != CPT_LIGHT || n2.getLight(LIGHTBANK_DAY, f2.getLightingFlags()) < light_level_day) {
+						day_darken *= 0.96;
+					}
+					if (f2.param_type != CPT_LIGHT || n2.getLight(LIGHTBANK_NIGHT, f2.getLightingFlags()) < light_level_night) {
+						night_darken *= 0.96;
+					}
+				}
+			}
+			
 			light_day += decode_light(light_level_day);
 			light_night += decode_light(light_level_night);
 			light_count++;
 		} else {
+			if (nonzero_facedir && dirs[i].X * face_dir.X + dirs[i].Y * face_dir.Y + dirs[i].Z * face_dir.Z == 0) {
+				day_darken *= 0.96;
+				night_darken *= 0.96;
+			}
+			
 			ambient_occlusion++;
 		}
 		return f.light_propagates;
@@ -226,6 +256,11 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 		light_day /= light_count;
 		light_night /= light_count;
 	}
+	
+	if (decode_light(light_src_max_front) < light_night) {
+		light_day = (u16)(light_day * day_darken);
+		light_night = (u16)(light_night * night_darken);
+	}
 
 	// boost direct sunlight, if any
 	if (direct_sunlight)
@@ -234,14 +269,14 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 	// Boost brightness around light sources
 	bool skip_ambient_occlusion_day = false;
 	if (decode_light(light_source_max) >= light_day) {
-		light_day = decode_light(light_source_max);
-		skip_ambient_occlusion_day = true;
+		//light_day = decode_light(light_source_max);
+		//skip_ambient_occlusion_day = true;
 	}
 
 	bool skip_ambient_occlusion_night = false;
 	if(decode_light(light_source_max) >= light_night) {
-		light_night = decode_light(light_source_max);
-		skip_ambient_occlusion_night = true;
+		//light_night = decode_light(light_source_max);
+		//skip_ambient_occlusion_night = true;
 	}
 
 	if (ambient_occlusion > 4) {
@@ -265,7 +300,7 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 			light_night = rangelim(core::round32(
 					light_night * light_amount[ambient_occlusion]), 0, 255);
 	}
-
+	
 	return light_day | (light_night << 8);
 }
 
@@ -274,9 +309,24 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 	Both light banks.
 	Node at p is solid, and thus the lighting is face-dependent.
 */
-u16 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &corner, MeshMakeData *data)
+u16 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &origcorner, MeshMakeData *data)
 {
-	return getSmoothLightTransparent(p + face_dir, corner - 2 * face_dir, data);
+	const v3s16 corner = origcorner - 2 * face_dir;
+	const std::array<v3s16,8> dirs = {{
+		// Always shine light
+		v3s16(0,0,0),
+		v3s16(corner.X,0,0),
+		v3s16(0,corner.Y,0),
+		v3s16(0,0,corner.Z),
+
+		// Can be obstructed
+		v3s16(corner.X,corner.Y,0),
+		v3s16(corner.X,0,corner.Z),
+		v3s16(0,corner.Y,corner.Z),
+		v3s16(corner.X,corner.Y,corner.Z)
+	}};
+	return getSmoothLightCombined(p + face_dir, dirs, data, face_dir);
+	// return getSmoothLightTransparent(p + face_dir, corner - 2 * face_dir, data);
 }
 
 /*
@@ -299,7 +349,7 @@ u16 getSmoothLightTransparent(const v3s16 &p, const v3s16 &corner, MeshMakeData 
 		v3s16(0,corner.Y,corner.Z),
 		v3s16(corner.X,corner.Y,corner.Z)
 	}};
-	return getSmoothLightCombined(p, dirs, data);
+	return getSmoothLightCombined(p, dirs, data, v3s16(0,0,0));
 }
 
 void get_sunlight_color(video::SColorf *sunlight, u32 daynight_ratio)
