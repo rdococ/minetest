@@ -177,12 +177,10 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 	u16 light_night = 0;
 	bool direct_sunlight = false;
 	
-	float day_darken = 1;
-	float night_darken = 1;
-	
-	u8 light_src_max_front = 0;
-	
 	bool nonzero_facedir = face_dir.X != 0 || face_dir.Y != 0 || face_dir.Z != 0;
+	
+	float day_darken = 0;
+	float night_darken = 0;
 	
 	auto add_node = [&] (u8 i, bool obstructed = false) -> bool {
 		if (obstructed) {
@@ -193,8 +191,8 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 		if (n.getContent() == CONTENT_IGNORE)
 			return true;
 		const ContentFeatures &f = ndef->get(n);
-		if (f.light_source > light_source_max)
-			light_source_max = f.light_source;
+		/*if (f.light_source > light_source_max)
+			light_source_max = f.light_source;*/
 		// Check f.solidness because fast-style leaves look better this way
 		if (f.param_type == CPT_LIGHT && f.visuals->solidness != 2) {
 			u8 light_level_day = n.getLight(LIGHTBANK_DAY, f.getLightingFlags());
@@ -202,32 +200,37 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 			if (light_level_day == LIGHT_SUN)
 				direct_sunlight = true;
 			
+			bool matches_facedir = dirs[i].X * face_dir.X + dirs[i].Y * face_dir.Y + dirs[i].Z * face_dir.Z == 0;
+			
+			if (!nonzero_facedir || matches_facedir) {
+				if (f.light_source > light_source_max)
+					light_source_max = f.light_source;
+			}
 			// adjust light based on direction
 			if (nonzero_facedir) {
-				if (dirs[i].X * face_dir.X + dirs[i].Y * face_dir.Y + dirs[i].Z * face_dir.Z == 0) {
-					if (f.light_source > light_src_max_front) light_src_max_front = f.light_source;
-					
-					MapNode n2 = data->m_vmanip.getNodeNoExNoEmerge(p + dirs[i] + face_dir);
-					const ContentFeatures &f2 = ndef->get(n2);
-					
-					if (f2.param_type != CPT_LIGHT || n2.getLight(LIGHTBANK_DAY, f2.getLightingFlags()) < light_level_day) {
-						day_darken *= 0.96;
+				MapNode n2 = data->m_vmanip.getNodeNoExNoEmerge(p + dirs[i] + face_dir);
+				const ContentFeatures &f2 = ndef->get(n2);
+				
+				auto day_check = light_level_day;
+				if (light_level_day > light_level_night && face_dir.Y < 1) day_check++;
+				
+				if (f2.param_type != CPT_LIGHT) {
+					day_darken += decode_light(light_level_day) * 0.15;
+					night_darken += decode_light(light_level_night) * 0.15;
+				} else {
+					if (n2.getLight(LIGHTBANK_DAY, f2.getLightingFlags()) < day_check) {
+						day_darken += decode_light(light_level_day) * 0.3;
 					}
-					if (f2.param_type != CPT_LIGHT || n2.getLight(LIGHTBANK_NIGHT, f2.getLightingFlags()) < light_level_night) {
-						night_darken *= 0.96;
+					if (n2.getLight(LIGHTBANK_NIGHT, f2.getLightingFlags()) < light_level_night) {
+						night_darken += decode_light(light_level_night) * 0.3;
 					}
 				}
 			}
-			
+					
 			light_day += decode_light(light_level_day);
 			light_night += decode_light(light_level_night);
 			light_count++;
 		} else {
-			if (nonzero_facedir && dirs[i].X * face_dir.X + dirs[i].Y * face_dir.Y + dirs[i].Z * face_dir.Z == 0) {
-				day_darken *= 0.96;
-				night_darken *= 0.96;
-			}
-			
 			ambient_occlusion++;
 		}
 		return f.light_propagates;
@@ -256,11 +259,6 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 		light_day /= light_count;
 		light_night /= light_count;
 	}
-	
-	if (decode_light(light_src_max_front) < light_night) {
-		light_day = (u16)(light_day * day_darken);
-		light_night = (u16)(light_night * night_darken);
-	}
 
 	// boost direct sunlight, if any
 	if (direct_sunlight)
@@ -269,14 +267,19 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 	// Boost brightness around light sources
 	bool skip_ambient_occlusion_day = false;
 	if (decode_light(light_source_max) >= light_day) {
-		//light_day = decode_light(light_source_max);
-		//skip_ambient_occlusion_day = true;
+		light_day = decode_light(light_source_max);
+		skip_ambient_occlusion_day = true;
 	}
 
 	bool skip_ambient_occlusion_night = false;
-	if(decode_light(light_source_max) >= light_night) {
-		//light_night = decode_light(light_source_max);
-		//skip_ambient_occlusion_night = true;
+	if (decode_light(light_source_max) >= light_night) {
+		light_night = decode_light(light_source_max);
+		skip_ambient_occlusion_night = true;
+	}
+	
+	if (light_count > 0) {
+		light_day -= (u16)(day_darken / light_count);
+		light_night -= (u16)(night_darken / light_count);
 	}
 
 	if (ambient_occlusion > 4) {
@@ -326,7 +329,6 @@ u16 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &orig
 		v3s16(corner.X,corner.Y,corner.Z)
 	}};
 	return getSmoothLightCombined(p + face_dir, dirs, data, face_dir);
-	// return getSmoothLightTransparent(p + face_dir, corner - 2 * face_dir, data);
 }
 
 /*
